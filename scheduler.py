@@ -33,20 +33,21 @@ class Scheduler:
         """Основной цикл планировщика"""
         while self.is_running:
             try:
-                self._check_reminders()
-                time.sleep(30)  # Проверяем каждые 30 секунд
+                self._check_daily_reminders()
+                self._check_weekly_reminders()
+                self._check_week_transition()
+                time.sleep(60)  # Проверяем каждую минуту
             except Exception as e:
                 logger.error(f"Ошибка в планировщике: {e}")
-                time.sleep(60)
+                time.sleep(300)  # Ждем 5 минут при ошибке
     
-    def _check_reminders(self):
-        """Проверка напоминаний"""
+    def _check_daily_reminders(self):
+        """Проверка ежедневных напоминаний"""
         now = datetime.datetime.now()
         
         for minutes_before in REMINDER_TIMES:
             reminder_time = now + datetime.timedelta(minutes=minutes_before)
             
-            # Получаем задачи на это время
             tasks = self.db.get_tasks_for_reminder(reminder_time)
             
             if tasks:
@@ -55,7 +56,6 @@ class Scheduler:
                     task_id, user_id, task_text, task_date, task_time, first_name = task
                     task_ids.append(task_id)
                     
-                    # Формируем сообщение
                     message = (
                         f"🔔 Напоминание, {first_name}!\n"
                         f"Через {minutes_before} минут:\n"
@@ -64,16 +64,74 @@ class Scheduler:
                         f"📅 {task_date}"
                     )
                     
-                    # Отправляем напоминание
                     try:
-                        self.bot.send_message(
-                            chat_id=user_id,
-                            text=message
-                        )
+                        self.bot.send_message(chat_id=user_id, text=message)
                         logger.info(f"Напоминание отправлено пользователю {user_id}")
                     except Exception as e:
                         logger.error(f"Не удалось отправить напоминание пользователю {user_id}: {e}")
                 
-                # Помечаем задачи как напомненные
                 if task_ids:
                     self.db.mark_as_reminded(task_ids)
+    
+    def _check_weekly_reminders(self):
+        """Проверка ежедневных напоминаний о недельных задачах в 10:00"""
+        now = datetime.datetime.now()
+        
+        # Проверяем, сейчас 10:00 утра
+        if now.hour == 10 and now.minute == 0:
+            today = datetime.date.today()
+            week_start = self._get_week_start(today)
+            
+            # Получаем всех пользователей с активными недельными задачами
+            users = self.db.get_users_for_weekly_reminder()
+            
+            for user_id in users:
+                try:
+                    tasks = self.db.get_weekly_tasks(user_id, week_start)
+                    if tasks:
+                        message = self._format_weekly_reminder(tasks, week_start)
+                        self.bot.send_message(chat_id=user_id, text=message)
+                        logger.info(f"Напоминание о недельных задачах отправлено пользователю {user_id}")
+                except Exception as e:
+                    logger.error(f"Ошибка отправки недельного напоминания пользователю {user_id}: {e}")
+    
+    def _check_week_transition(self):
+        """Проверка перехода на новую неделю (в понедельник в 00:01)"""
+        now = datetime.datetime.now()
+        
+        # Проверяем, что сейчас понедельник 00:01
+        if now.weekday() == 0 and now.hour == 0 and now.minute == 1:
+            last_week = self._get_week_start(datetime.date.today() - datetime.timedelta(days=7))
+            current_week = self._get_week_start(datetime.date.today())
+            
+            # Переносим невыполненные задачи на текущую неделю
+            self.db.move_uncompleted_weekly_tasks(last_week, current_week)
+            logger.info(f"Невыполненные задачи перенесены с {last_week} на {current_week}")
+    
+    def _get_week_start(self, date):
+        """Получить дату начала недели (понедельник) для указанной даты"""
+        return date - datetime.timedelta(days=date.weekday())
+    
+    def _format_weekly_reminder(self, tasks, week_start):
+        """Форматирование напоминания о недельных задачах"""
+        week_end = week_start + datetime.timedelta(days=6)
+        week_range = f"{week_start.strftime('%d.%m')} - {week_end.strftime('%d.%m.%Y')}"
+        
+        message = f"📅 Задачи на неделю ({week_range}):\n\n"
+        
+        completed_count = 0
+        for task_id, task_text, completed in tasks:
+            if completed:
+                message += f"✅ {task_text}\n"
+                completed_count += 1
+            else:
+                message += f"📝 {task_text}\n"
+                message += f"   ✓ Выполнить_{task_id}\n\n"
+        
+        total_count = len(tasks)
+        message += f"\n📊 Прогресс: {completed_count}/{total_count} выполнено"
+        
+        if completed_count < total_count:
+            message += "\n\nНе забудьте выполнить оставшиеся задачи! 💪"
+        
+        return message

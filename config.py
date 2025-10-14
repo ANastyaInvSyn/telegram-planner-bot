@@ -7,4 +7,5 @@ REMINDER_TIMES = [5, 15, 30, 60]
 
 # Для отладки
 if os.environ.get('RAILWAY_STATIC_URL'):
-    print("Бот запущен на Railway!")
+    print("Бот запущен на Railway")
+

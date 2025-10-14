@@ -1,110 +1,137 @@
-import sqlite3
-import datetime
+import os
+import psycopg2
+from datetime import datetime
 from typing import List, Tuple, Optional
 
 class Database:
-    def __init__(self, db_name="planner_bot.db"):
-        self.db_name = db_name
+    def __init__(self):
+        self.db_url = os.environ.get('DATABASE_URL')
+        self.conn = None
+        self.connect()
         self.init_db()
+    
+    def connect(self):
+        """Подключение к базе данных"""
+        if self.db_url:
+            # PostgreSQL на хостинге
+            self.conn = psycopg2.connect(self.db_url, sslmode='require')
+        else:
+            # Локальная SQLite (для разработки)
+            import sqlite3
+            self.conn = sqlite3.connect('planner_bot.db', check_same_thread=False)
     
     def init_db(self):
         """Инициализация базы данных"""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
+        cursor = self.conn.cursor()
         
-        # Таблица пользователей
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                username TEXT,
-                first_name TEXT,
-                registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
+        if self.db_url and 'postgres' in self.db_url:
+            # PostgreSQL таблицы
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id BIGINT PRIMARY KEY,
+                    username TEXT,
+                    first_name TEXT,
+                    registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS tasks (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT,
+                    task_text TEXT NOT NULL,
+                    task_date DATE NOT NULL,
+                    task_time TIME NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    reminded BOOLEAN DEFAULT FALSE,
+                    FOREIGN KEY (user_id) REFERENCES users (user_id)
+                )
+            ''')
+        else:
+            # SQLite таблицы
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id INTEGER PRIMARY KEY,
+                    username TEXT,
+                    first_name TEXT,
+                    registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    task_text TEXT NOT NULL,
+                    task_date DATE NOT NULL,
+                    task_time TIME NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    reminded BOOLEAN DEFAULT FALSE,
+                    FOREIGN KEY (user_id) REFERENCES users (user_id)
+                )
+            ''')
         
-        # Таблица задач
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                task_text TEXT NOT NULL,
-                task_date DATE NOT NULL,
-                task_time TIME NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                reminded BOOLEAN DEFAULT FALSE,
-                FOREIGN KEY (user_id) REFERENCES users (user_id)
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
+        self.conn.commit()
     
     def add_user(self, user_id: int, username: str, first_name: str):
         """Добавление пользователя"""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
+        cursor = self.conn.cursor()
         
         cursor.execute('''
-            INSERT OR IGNORE INTO users (user_id, username, first_name)
-            VALUES (?, ?, ?)
+            INSERT INTO users (user_id, username, first_name)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (user_id) DO NOTHING
         ''', (user_id, username, first_name))
         
-        conn.commit()
-        conn.close()
+        self.conn.commit()
     
     def add_task(self, user_id: int, task_text: str, task_date: str, task_time: str) -> int:
         """Добавление задачи"""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
+        cursor = self.conn.cursor()
         
         cursor.execute('''
             INSERT INTO tasks (user_id, task_text, task_date, task_time)
-            VALUES (?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
         ''', (user_id, task_text, task_date, task_time))
         
-        task_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
+        task_id = cursor.fetchone()[0]
+        self.conn.commit()
         return task_id
     
     def get_user_tasks(self, user_id: int, date: str = None) -> List[Tuple]:
         """Получение задач пользователя"""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
+        cursor = self.conn.cursor()
         
         if date:
             cursor.execute('''
                 SELECT id, task_text, task_time FROM tasks 
-                WHERE user_id = ? AND task_date = ? 
+                WHERE user_id = %s AND task_date = %s 
                 ORDER BY task_time
             ''', (user_id, date))
         else:
             cursor.execute('''
                 SELECT id, task_text, task_date, task_time FROM tasks 
-                WHERE user_id = ? 
+                WHERE user_id = %s 
                 ORDER BY task_date, task_time
             ''', (user_id,))
         
         tasks = cursor.fetchall()
-        conn.close()
         return tasks
     
     def delete_task(self, task_id: int, user_id: int):
         """Удаление задачи"""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
+        cursor = self.conn.cursor()
         
         cursor.execute('''
-            DELETE FROM tasks WHERE id = ? AND user_id = ?
+            DELETE FROM tasks WHERE id = %s AND user_id = %s
         ''', (task_id, user_id))
         
-        conn.commit()
-        conn.close()
+        self.conn.commit()
     
-    def get_tasks_for_reminder(self, target_datetime: datetime.datetime) -> List[Tuple]:
+    def get_tasks_for_reminder(self, target_datetime: datetime) -> List[Tuple]:
         """Получение задач для напоминания"""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
+        cursor = self.conn.cursor()
         
         target_date = target_datetime.strftime('%Y-%m-%d')
         target_time = target_datetime.strftime('%H:%M')
@@ -113,11 +140,10 @@ class Database:
             SELECT t.user_id, t.task_text, t.task_date, t.task_time, u.first_name
             FROM tasks t
             JOIN users u ON t.user_id = u.user_id
-            WHERE t.task_date = ? AND t.task_time = ? AND t.reminded = FALSE
+            WHERE t.task_date = %s AND t.task_time = %s AND t.reminded = FALSE
         ''', (target_date, target_time))
         
         tasks = cursor.fetchall()
-        conn.close()
         return tasks
     
     def mark_as_reminded(self, task_ids: List[int]):
@@ -125,14 +151,12 @@ class Database:
         if not task_ids:
             return
             
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
+        cursor = self.conn.cursor()
         
-        placeholders = ','.join('?' * len(task_ids))
+        placeholders = ','.join(['%s'] * len(task_ids))
         cursor.execute(f'''
             UPDATE tasks SET reminded = TRUE 
             WHERE id IN ({placeholders})
         ''', task_ids)
         
-        conn.commit()
-        conn.close()
+        self.conn.commit()

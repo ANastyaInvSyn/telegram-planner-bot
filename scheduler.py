@@ -4,7 +4,8 @@ import datetime
 from database import Database
 import logging
 from config import REMINDER_TIMES
-import logging
+
+logger = logging.getLogger(__name__)
 
 class Scheduler:
     def __init__(self, bot):
@@ -19,14 +20,14 @@ class Scheduler:
         self.thread = threading.Thread(target=self._run)
         self.thread.daemon = True
         self.thread.start()
-        logging.info("Планировщик напоминаний запущен")
+        logger.info("Планировщик напоминаний запущен")
     
     def stop(self):
         """Остановка планировщика"""
         self.is_running = False
         if self.thread:
             self.thread.join()
-        logging.info("Планировщик напоминаний остановлен")
+        logger.info("Планировщик напоминаний остановлен")
     
     def _run(self):
         """Основной цикл планировщика"""
@@ -35,7 +36,7 @@ class Scheduler:
                 self._check_reminders()
                 time.sleep(30)  # Проверяем каждые 30 секунд
             except Exception as e:
-                logging.error(f"Ошибка в планировщике: {e}")
+                logger.error(f"Ошибка в планировщике: {e}")
                 time.sleep(60)
     
     def _check_reminders(self):
@@ -51,12 +52,12 @@ class Scheduler:
             if tasks:
                 task_ids = []
                 for task in tasks:
-                    user_id, task_text, task_date, task_time, first_name = task
-                    task_ids.append(task[0])  # ID задачи
+                    task_id, user_id, task_text, task_date, task_time, first_name = task
+                    task_ids.append(task_id)
                     
                     # Формируем сообщение
                     message = (
-                        f"🔔 Напоминание!\n"
+                        f"🔔 Напоминание, {first_name}!\n"
                         f"Через {minutes_before} минут:\n"
                         f"📝 {task_text}\n"
                         f"🕐 {task_time}\n"
@@ -69,10 +70,10 @@ class Scheduler:
                             chat_id=user_id,
                             text=message
                         )
-                        logging.info(f"Напоминание отправлено пользователю {user_id}")
+                        logger.info(f"Напоминание отправлено пользователю {user_id}")
                     except Exception as e:
-                        logging.error(f"Не удалось отправить напоминание: {e}")
+                        logger.error(f"Не удалось отправить напоминание пользователю {user_id}: {e}")
                 
                 # Помечаем задачи как напомненные
-
-                self.db.mark_as_reminded(task_ids)
+                if task_ids:
+                    self.db.mark_as_reminded(task_ids)

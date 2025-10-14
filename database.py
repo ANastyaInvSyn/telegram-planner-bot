@@ -77,9 +77,13 @@ class Database:
     def __init__(self):
         print("🔍 Поиск DATABASE_URL...")
         
+        # Сначала устанавливаем атрибуты по умолчанию
+        self.use_postgres = False
+        self.storage = MemoryStorage()
+        self.conn = None
+        
         # Пробуем подключиться к PostgreSQL
         self.db_url = os.environ.get('DATABASE_URL')
-        self.storage = MemoryStorage()  # Всегда инициализируем MemoryStorage
         
         if self.db_url:
             print(f"✅ Найдена переменная: DATABASE_URL")
@@ -92,14 +96,12 @@ class Database:
             except Exception as e:
                 print(f"❌ Ошибка подключения к PostgreSQL: {e}")
                 print("📝 Используем временное хранилище")
-                self.use_postgres = False
         else:
             print("❌ Не найдена переменная базы данных, используем временное хранилище")
-            self.use_postgres = False
 
     def init_db(self):
         """Инициализация базы данных PostgreSQL"""
-        if not self.use_postgres:
+        if not self.use_postgres or not self.conn:
             return
             
         cursor = self.conn.cursor()
@@ -130,7 +132,7 @@ class Database:
         cursor.close()
 
     def add_user(self, user_id: int, username: str, first_name: str):
-        if self.use_postgres:
+        if self.use_postgres and self.conn:
             cursor = self.conn.cursor()
             cursor.execute('''
                 INSERT INTO users (user_id, username, first_name)
@@ -143,7 +145,7 @@ class Database:
             self.storage.add_user(user_id, username, first_name)
 
     def add_task(self, user_id: int, task_text: str, task_date: str, task_time: str) -> int:
-        if self.use_postgres:
+        if self.use_postgres and self.conn:
             cursor = self.conn.cursor()
             cursor.execute('''
                 INSERT INTO tasks (user_id, task_text, task_date, task_time)
@@ -158,7 +160,7 @@ class Database:
             return self.storage.add_task(user_id, task_text, task_date, task_time)
 
     def get_user_tasks(self, user_id: int, date: str = None) -> List[Tuple]:
-        if self.use_postgres:
+        if self.use_postgres and self.conn:
             cursor = self.conn.cursor()
             if date:
                 cursor.execute('''
@@ -180,7 +182,7 @@ class Database:
             return self.storage.get_user_tasks(user_id, date)
 
     def delete_task(self, task_id: int, user_id: int):
-        if self.use_postgres:
+        if self.use_postgres and self.conn:
             cursor = self.conn.cursor()
             cursor.execute('''
                 DELETE FROM tasks WHERE id = %s AND user_id = %s
@@ -191,7 +193,7 @@ class Database:
             self.storage.delete_task(task_id, user_id)
 
     def get_tasks_for_reminder(self, target_datetime: datetime) -> List[Tuple]:
-        if self.use_postgres:
+        if self.use_postgres and self.conn:
             cursor = self.conn.cursor()
             target_date = target_datetime.strftime('%Y-%m-%d')
             target_time = target_datetime.strftime('%H:%M')
@@ -210,7 +212,7 @@ class Database:
             return []
 
     def mark_as_reminded(self, task_ids: List[int]):
-        if self.use_postgres and task_ids:
+        if self.use_postgres and self.conn and task_ids:
             cursor = self.conn.cursor()
             placeholders = ','.join(['%s'] * len(task_ids))
             cursor.execute(f'''

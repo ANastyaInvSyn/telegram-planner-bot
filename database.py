@@ -221,3 +221,21 @@ class Database:
             ''', task_ids)
             self.conn.commit()
             cursor.close()
+
+def get_task_ids_for_reminder(self, target_datetime: datetime) -> List[int]:
+    """Получить ID задач для напоминания"""
+    if self.use_postgres and self.conn:
+        cursor = self.conn.cursor()
+        target_date = target_datetime.strftime('%Y-%m-%d')
+        target_time = target_datetime.strftime('%H:%M')
+        
+        cursor.execute('''
+            SELECT id FROM tasks 
+            WHERE task_date = %s AND task_time = %s AND reminded = FALSE
+        ''', (target_date, target_time))
+        
+        task_ids = [row[0] for row in cursor.fetchall()]
+        cursor.close()
+        return task_ids
+    else:
+        return []

@@ -2,6 +2,7 @@ import threading
 import time
 import datetime
 from database import Database
+import logging
 from config import REMINDER_TIMES
 import logging
 
@@ -73,4 +74,5 @@ class Scheduler:
                         logging.error(f"Не удалось отправить напоминание: {e}")
                 
                 # Помечаем задачи как напомненные
+
                 self.db.mark_as_reminded(task_ids)

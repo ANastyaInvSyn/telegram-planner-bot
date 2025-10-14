@@ -16,6 +16,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+logger = logging.getLogger(__name__)
 
 # Состояния для ConversationHandler
 WAITING_TASK, WAITING_DATE, WAITING_TIME = range(3)
@@ -89,54 +90,57 @@ class PlannerBot:
         self.application.add_handler(CommandHandler("tasks", self.all_tasks_command))
         self.application.add_handler(CommandHandler("today", self.today_tasks_command))
         self.application.add_handler(CommandHandler("tomorrow", self.tomorrow_tasks_command))
-        self.application.add_handler(CommandHandler("add", self.add_command))
         self.application.add_handler(CommandHandler("delete", self.delete_command))
-        
-        # Обработчики для кнопок главного меню
-        self.application.add_handler(MessageHandler(filters.Text("📋 Мои задачи"), self.all_tasks_button))
-        self.application.add_handler(MessageHandler(filters.Text("📅 Сегодня"), self.today_tasks_button))
-        self.application.add_handler(MessageHandler(filters.Text("📆 Завтра"), self.tomorrow_tasks_button))
-        self.application.add_handler(MessageHandler(filters.Text("ℹ️ Помощь"), self.help_button))
-        self.application.add_handler(MessageHandler(filters.Text("🗑 Удалить задачу"), self.delete_task_button))
-        self.application.add_handler(MessageHandler(filters.Text("⬅️ Назад"), self.back_to_main))
         
         # Обработчик для добавления задач через ConversationHandler
         add_conv_handler = ConversationHandler(
             entry_points=[
-                MessageHandler(filters.Text("📝 Добавить задачу"), self.start_add_task)
+                MessageHandler(filters.Text("📝 Добавить задачу"), self.start_add_task),
+                CommandHandler("add", self.start_add_task)
             ],
             states={
                 WAITING_TASK: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Text("❌ Отмена"), self.get_task_text)
+                    MessageHandler(filters.TEXT & ~filters.Text(["❌ Отмена", "⬅️ Назад"]), self.get_task_text)
                 ],
                 WAITING_DATE: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Text("❌ Отмена"), self.get_task_date)
+                    MessageHandler(filters.TEXT & ~filters.Text(["❌ Отмена", "⬅️ Назад"]), self.get_task_date)
                 ],
                 WAITING_TIME: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Text("❌ Отмена"), self.get_task_time)
+                    MessageHandler(filters.TEXT & ~filters.Text(["❌ Отмена", "⬅️ Назад"]), self.get_task_time)
                 ],
             },
             fallbacks=[
                 MessageHandler(filters.Text("❌ Отмена"), self.cancel_command),
-                CommandHandler("cancel", self.cancel_command)
+                CommandHandler("cancel", self.cancel_command),
+                MessageHandler(filters.Text("⬅️ Назад"), self.back_to_main)
             ],
         )
         self.application.add_handler(add_conv_handler)
         
-        # Обработчик для отмены в процессе добавления задачи
-        self.application.add_handler(MessageHandler(filters.Text("❌ Отмена"), self.cancel_command))
+        # Обработчики для кнопок главного меню (только когда нет активного состояния)
+        main_menu_handlers = [
+            MessageHandler(filters.Text("📋 Мои задачи"), self.all_tasks_button),
+            MessageHandler(filters.Text("📅 Сегодня"), self.today_tasks_button),
+            MessageHandler(filters.Text("📆 Завтра"), self.tomorrow_tasks_button),
+            MessageHandler(filters.Text("ℹ️ Помощь"), self.help_button),
+            MessageHandler(filters.Text("🗑 Удалить задачу"), self.delete_task_button),
+            MessageHandler(filters.Text("⬅️ Назад"), self.back_to_main)
+        ]
+        
+        for handler in main_menu_handlers:
+            self.application.add_handler(handler)
         
         # Обработчик для удаления задач через кнопки
         self.application.add_handler(MessageHandler(filters.Regex(r'^🗑 Удалить_\d+$'), self.quick_delete_task))
         
         # Обработчик для удаления по ID (простой текст)
-        self.application.add_handler(MessageHandler(filters.Regex(r'^\d+$') & ~filters.COMMAND, self.delete_by_id))
+        self.application.add_handler(MessageHandler(filters.Regex(r'^\d+$'), self.delete_by_id))
         
         # Обработчик неизвестных команд
         self.application.add_handler(MessageHandler(filters.COMMAND, self.unknown_command))
         
         # Обработчик любых текстовых сообщений (если не попали в другие обработчики)
-        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_any_text))
+        self.application.add_handler(MessageHandler(filters.TEXT, self.handle_any_text))
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
@@ -161,15 +165,12 @@ class PlannerBot:
         )
     
     async def start_add_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Начало процесса добавления задачи через кнопку"""
-        await update.message.reply_text(
-            "📝 Введите описание вашей задачи:",
-            reply_markup=self.get_cancel_keyboard()
-        )
-        return WAITING_TASK
-    
-    async def add_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /add"""
+        """Начало процесса добавления задачи"""
+        logger.info(f"Начало добавления задачи для пользователя {update.effective_user.id}")
+        
+        # Очищаем предыдущие данные
+        context.user_data.clear()
+        
         await update.message.reply_text(
             "📝 Введите описание вашей задачи:",
             reply_markup=self.get_cancel_keyboard()
@@ -178,7 +179,15 @@ class PlannerBot:
     
     async def get_task_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Получение текста задачи"""
-        context.user_data['task_text'] = update.message.text
+        task_text = update.message.text.strip()
+        if not task_text:
+            await update.message.reply_text(
+                "❌ Описание задачи не может быть пустым! Введите описание:",
+                reply_markup=self.get_cancel_keyboard()
+            )
+            return WAITING_TASK
+        
+        context.user_data['task_text'] = task_text
         
         await update.message.reply_text(
             "📅 Выберите дату задачи или введите в формате ДД.ММ.ГГГГ:",
@@ -231,7 +240,7 @@ class PlannerBot:
         
         # Обработка быстрого выбора времени
         if time_text == "⏰ Сейчас":
-            now = datetime.now() + timedelta(minutes=1)  # +1 минута чтобы избежать напоминания в прошлом
+            now = datetime.now() + timedelta(minutes=1)
             task_time = now.strftime("%H:%M")
         elif time_text == "🕐 Через 1 час":
             task_time = (datetime.now() + timedelta(hours=1)).strftime("%H:%M")
@@ -273,6 +282,7 @@ class PlannerBot:
         # Очищаем user_data
         context.user_data.clear()
         
+        logger.info(f"Задача {task_id} добавлена для пользователя {user_id}")
         return ConversationHandler.END
     
     async def delete_task_button(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -298,6 +308,14 @@ class PlannerBot:
     
     async def delete_by_id(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Удаление задачи по введенному ID"""
+        # Проверяем, не находимся ли мы в состоянии добавления задачи
+        if context.user_data:
+            await update.message.reply_text(
+                "❌ Сначала завершите добавление задачи или нажмите '❌ Отмена'",
+                reply_markup=self.get_cancel_keyboard()
+            )
+            return
+        
         user_id = update.effective_user.id
         task_id_text = update.message.text
         
@@ -358,10 +376,15 @@ class PlannerBot:
     
     async def back_to_main(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Возврат в главное меню"""
+        # Если мы в процессе добавления задачи, очищаем состояние
+        if context.user_data:
+            context.user_data.clear()
+        
         await update.message.reply_text(
             "⬅️ Возврат в главное меню",
             reply_markup=self.get_main_keyboard()
         )
+        return ConversationHandler.END
     
     async def all_tasks_button(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать все задачи пользователя через кнопку"""
@@ -423,7 +446,7 @@ class PlannerBot:
             )
             return
         
-        tasks_text = "📅 Задачи на завтра:\n\n"
+        tasks_text = "📆 Задачи на завтра:\n\n"
         tasks_text += self.get_tasks_with_delete_buttons(tasks)
         
         await update.message.reply_text(tasks_text, reply_markup=self.get_main_keyboard())
@@ -464,7 +487,11 @@ class PlannerBot:
     
     async def handle_any_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик любых текстовых сообщений"""
-        # Если сообщение не обработано другими обработчиками, покажем главное меню
+        # Если есть активное состояние, игнорируем это сообщение
+        # ConversationHandler сам обработает его
+        if context.user_data:
+            return
+            
         await update.message.reply_text(
             "Используйте кнопки меню для управления задачами:",
             reply_markup=self.get_main_keyboard()
@@ -484,7 +511,8 @@ class PlannerBot:
         self.application.run_polling()
         
         # При остановке останавливаем планировщик
-        self.scheduler.stop()
+        if self.scheduler:
+            self.scheduler.stop()
 
 if __name__ == "__main__":
     bot = PlannerBot()

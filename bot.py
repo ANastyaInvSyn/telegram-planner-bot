@@ -187,6 +187,15 @@ class PlannerBot:
             )
             return WAITING_TASK
         
+        # Проверяем, что это не время (формат ЧЧ:ММ)
+        time_pattern = r'^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$'
+        if re.match(time_pattern, task_text):
+            await update.message.reply_text(
+                "❌ Вы ввели время вместо описания задачи! Пожалуйста, введите текстовое описание задачи:",
+                reply_markup=self.get_cancel_keyboard()
+            )
+            return WAITING_TASK
+        
         context.user_data['task_text'] = task_text
         
         await update.message.reply_text(
@@ -235,63 +244,63 @@ class PlannerBot:
         return WAITING_TIME
     
     async def get_task_time(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение времени задачи и сохранение"""
-    time_text = update.message.text
-    
-    # Обработка быстрого выбора времени
-    if time_text == "⏰ Сейчас":
-        now = datetime.now() + timedelta(minutes=1)
-        task_time = now.strftime("%H:%M")
-    elif time_text == "🕐 Через 1 час":
-        task_time = (datetime.now() + timedelta(hours=1)).strftime("%H:%M")
-    elif time_text == "🕑 Через 2 часа":
-        task_time = (datetime.now() + timedelta(hours=2)).strftime("%H:%M")
-    else:
-        # Парсим введенное время
-        if not re.match(r'^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$', time_text):
-            await update.message.reply_text(
-                "❌ Неверный формат времени! Пожалуйста, введите время в формате ЧЧ:ММ (например: 14:30) или выберите из кнопок:",
-                reply_markup=self.get_time_keyboard()
-            )
-            return WAITING_TIME
-        task_time = time_text
-    
-    # Получаем данные из контекста
-    user_id = update.effective_user.id
-    task_text = context.user_data['task_text']
-    task_date = context.user_data['task_date']
-    display_date = context.user_data['display_date']
-    
-    # ДИАГНОСТИКА: проверяем состояние базы перед добавлением
-    print(f"🔄 Перед добавлением задачи: user_id={user_id}, task_text={task_text}, task_date={task_date}, task_time={task_time}")
-    self.db.check_database_status()
-    
-    # Сохраняем задачу в базу
-    task_id = self.db.add_task(user_id, task_text, task_date, task_time)
-    
-    # ДИАГНОСТИКА: проверяем состояние базы после добавления
-    print(f"🔄 После добавления задачи: task_id={task_id}")
-    self.db.check_database_status()
-    
-    success_text = (
-        f"✅ Задача успешно добавлена!\n\n"
-        f"📝 {task_text}\n"
-        f"📅 {display_date}\n"
-        f"🕐 {task_time}\n\n"
-        f"ID задачи: {task_id}\n"
-        f"Я напомню о задаче заранее! 🔔"
-    )
-    
-    await update.message.reply_text(
-        success_text, 
-        reply_markup=self.get_main_keyboard()
-    )
-    
-    # Очищаем user_data
-    context.user_data.clear()
-    
-    logger.info(f"Задача {task_id} добавлена для пользователя {user_id}")
-    return ConversationHandler.END
+        """Получение времени задачи и сохранение"""
+        time_text = update.message.text
+        
+        # Обработка быстрого выбора времени
+        if time_text == "⏰ Сейчас":
+            now = datetime.now() + timedelta(minutes=1)
+            task_time = now.strftime("%H:%M")
+        elif time_text == "🕐 Через 1 час":
+            task_time = (datetime.now() + timedelta(hours=1)).strftime("%H:%M")
+        elif time_text == "🕑 Через 2 часа":
+            task_time = (datetime.now() + timedelta(hours=2)).strftime("%H:%M")
+        else:
+            # Парсим введенное время
+            if not re.match(r'^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$', time_text):
+                await update.message.reply_text(
+                    "❌ Неверный формат времени! Пожалуйста, введите время в формате ЧЧ:ММ (например: 14:30) или выберите из кнопок:",
+                    reply_markup=self.get_time_keyboard()
+                )
+                return WAITING_TIME
+            task_time = time_text
+        
+        # Получаем данные из контекста
+        user_id = update.effective_user.id
+        task_text = context.user_data['task_text']
+        task_date = context.user_data['task_date']
+        display_date = context.user_data['display_date']
+        
+        # ДИАГНОСТИКА: проверяем состояние базы перед добавлением
+        print(f"🔄 Перед добавлением задачи: user_id={user_id}, task_text={task_text}, task_date={task_date}, task_time={task_time}")
+        self.db.check_database_status()
+        
+        # Сохраняем задачу в базу
+        task_id = self.db.add_task(user_id, task_text, task_date, task_time)
+        
+        # ДИАГНОСТИКА: проверяем состояние базы после добавления
+        print(f"🔄 После добавления задачи: task_id={task_id}")
+        self.db.check_database_status()
+        
+        success_text = (
+            f"✅ Задача успешно добавлена!\n\n"
+            f"📝 {task_text}\n"
+            f"📅 {display_date}\n"
+            f"🕐 {task_time}\n\n"
+            f"ID задачи: {task_id}\n"
+            f"Я напомню о задаче заранее! 🔔"
+        )
+        
+        await update.message.reply_text(
+            success_text, 
+            reply_markup=self.get_main_keyboard()
+        )
+        
+        # Очищаем user_data
+        context.user_data.clear()
+        
+        logger.info(f"Задача {task_id} добавлена для пользователя {user_id}")
+        return ConversationHandler.END
     
     async def delete_task_button(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик кнопки удаления задачи - показывает список для удаления по ID"""
@@ -507,6 +516,10 @@ class PlannerBot:
     
     def run(self):
         """Запуск бота"""
+        # Проверяем состояние базы данных при запуске
+        print("🔍 Проверка состояния базы данных при запуске...")
+        self.db.check_database_status()
+        
         self.setup_handlers()
         
         # Запускаем планировщик напоминаний
@@ -525,4 +538,3 @@ class PlannerBot:
 if __name__ == "__main__":
     bot = PlannerBot()
     bot.run()
-

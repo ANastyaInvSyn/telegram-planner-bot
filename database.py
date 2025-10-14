@@ -25,24 +25,35 @@ class MemoryStorage:
             }
 
     def add_task(self, user_id: int, task_text: str, task_date: str, task_time: str) -> int:
-        if user_id not in self.tasks:
-            self.tasks[user_id] = []
-        
-        task_id = self.next_task_id
-        self.next_task_id += 1
-        
-        task = {
-            'id': task_id,
-            'user_id': user_id,
-            'text': task_text,
-            'date': task_date,
-            'time': task_time,
-            'created_at': datetime.now(),
-            'reminded': False
-        }
-        
-        self.tasks[user_id].append(task)
-        return task_id
+    if self.use_postgres and self.conn:
+        cursor = self.conn.cursor()
+        try:
+            print(f"🔄 Добавление задачи в PostgreSQL: user_id={user_id}, text={task_text}, date={task_date}, time={task_time}")
+            
+            cursor.execute('''
+                INSERT INTO tasks (user_id, task_text, task_date, task_time)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id
+            ''', (user_id, task_text, task_date, task_time))
+            
+            task_id = cursor.fetchone()[0]
+            self.conn.commit()
+            cursor.close()
+            
+            print(f"✅ Задача успешно добавлена в PostgreSQL с ID: {task_id}")
+            return task_id
+            
+        except Exception as e:
+            print(f"❌ Ошибка при добавлении задачи в PostgreSQL: {e}")
+            self.conn.rollback()
+            cursor.close()
+            
+            # При ошибке в PostgreSQL, пробуем добавить в память
+            print("🔄 Пробуем добавить задачу в память...")
+            return self.storage.add_task(user_id, task_text, task_date, task_time)
+    else:
+        print("🔄 Добавление задачи в память...")
+        return self.storage.add_task(user_id, task_text, task_date, task_time)
 
     def get_user_tasks(self, user_id: int, date: str = None) -> List[Tuple]:
         if user_id not in self.tasks:
@@ -291,3 +302,4 @@ class Database:
                 return []
         else:
             return []
+

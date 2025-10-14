@@ -6,72 +6,43 @@ from typing import List, Tuple, Optional
 class Database:
     def __init__(self):
         self.db_url = os.environ.get('DATABASE_URL')
-        self.conn = None
-        self.connect()
+        if not self.db_url:
+            raise ValueError("DATABASE_URL environment variable is required")
+        
+        self.conn = psycopg2.connect(self.db_url, sslmode='require')
         self.init_db()
-    
-    def connect(self):
-        """Подключение к базе данных"""
-        if self.db_url:
-            # PostgreSQL на хостинге
-            self.conn = psycopg2.connect(self.db_url, sslmode='require')
-        else:
-            # Локальная SQLite (для разработки)
-            import sqlite3
-            self.conn = sqlite3.connect('planner_bot.db', check_same_thread=False)
+        print("✅ Подключено к PostgreSQL")
     
     def init_db(self):
         """Инициализация базы данных"""
         cursor = self.conn.cursor()
         
-        if self.db_url and 'postgres' in self.db_url:
-            # PostgreSQL таблицы
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id BIGINT PRIMARY KEY,
-                    username TEXT,
-                    first_name TEXT,
-                    registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS tasks (
-                    id SERIAL PRIMARY KEY,
-                    user_id BIGINT,
-                    task_text TEXT NOT NULL,
-                    task_date DATE NOT NULL,
-                    task_time TIME NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    reminded BOOLEAN DEFAULT FALSE,
-                    FOREIGN KEY (user_id) REFERENCES users (user_id)
-                )
-            ''')
-        else:
-            # SQLite таблицы
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id INTEGER PRIMARY KEY,
-                    username TEXT,
-                    first_name TEXT,
-                    registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS tasks (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    task_text TEXT NOT NULL,
-                    task_date DATE NOT NULL,
-                    task_time TIME NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    reminded BOOLEAN DEFAULT FALSE,
-                    FOREIGN KEY (user_id) REFERENCES users (user_id)
-                )
-            ''')
+        # Таблица пользователей
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Таблица задач
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS tasks (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
+                task_text TEXT NOT NULL,
+                task_date DATE NOT NULL,
+                task_time TIME NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                reminded BOOLEAN DEFAULT FALSE,
+                FOREIGN KEY (user_id) REFERENCES users (user_id)
+            )
+        ''')
         
         self.conn.commit()
+        cursor.close()
     
     def add_user(self, user_id: int, username: str, first_name: str):
         """Добавление пользователя"""
@@ -84,6 +55,7 @@ class Database:
         ''', (user_id, username, first_name))
         
         self.conn.commit()
+        cursor.close()
     
     def add_task(self, user_id: int, task_text: str, task_date: str, task_time: str) -> int:
         """Добавление задачи"""
@@ -97,6 +69,7 @@ class Database:
         
         task_id = cursor.fetchone()[0]
         self.conn.commit()
+        cursor.close()
         return task_id
     
     def get_user_tasks(self, user_id: int, date: str = None) -> List[Tuple]:
@@ -117,6 +90,7 @@ class Database:
             ''', (user_id,))
         
         tasks = cursor.fetchall()
+        cursor.close()
         return tasks
     
     def delete_task(self, task_id: int, user_id: int):
@@ -128,6 +102,7 @@ class Database:
         ''', (task_id, user_id))
         
         self.conn.commit()
+        cursor.close()
     
     def get_tasks_for_reminder(self, target_datetime: datetime) -> List[Tuple]:
         """Получение задач для напоминания"""
@@ -144,6 +119,7 @@ class Database:
         ''', (target_date, target_time))
         
         tasks = cursor.fetchall()
+        cursor.close()
         return tasks
     
     def mark_as_reminded(self, task_ids: List[int]):
@@ -160,3 +136,4 @@ class Database:
         ''', task_ids)
         
         self.conn.commit()
+        cursor.close()

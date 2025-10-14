@@ -1,5 +1,6 @@
 import logging
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+import os
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, 
     ContextTypes, ConversationHandler, filters
@@ -7,7 +8,7 @@ from telegram.ext import (
 from datetime import datetime, timedelta
 import re
 
-from config import BOT_TOKEN
+from config import BOT_TOKEN, TIMEZONE, REMINDER_TIMES
 from database import Database
 from scheduler import Scheduler
 
@@ -117,7 +118,7 @@ class PlannerBot:
         )
         self.application.add_handler(add_conv_handler)
         
-        # Обработчики для кнопок главного меню (только когда нет активного состояния)
+        # Обработчики для кнопок главного меню
         main_menu_handlers = [
             MessageHandler(filters.Text("📋 Мои задачи"), self.all_tasks_button),
             MessageHandler(filters.Text("📅 Сегодня"), self.today_tasks_button),
@@ -133,13 +134,13 @@ class PlannerBot:
         # Обработчик для удаления задач через кнопки
         self.application.add_handler(MessageHandler(filters.Regex(r'^🗑 Удалить_\d+$'), self.quick_delete_task))
         
-        # Обработчик для удаления по ID (простой текст)
+        # Обработчик для удаления по ID
         self.application.add_handler(MessageHandler(filters.Regex(r'^\d+$'), self.delete_by_id))
         
         # Обработчик неизвестных команд
         self.application.add_handler(MessageHandler(filters.COMMAND, self.unknown_command))
         
-        # Обработчик любых текстовых сообщений (если не попали в другие обработчики)
+        # Обработчик любых текстовых сообщений
         self.application.add_handler(MessageHandler(filters.TEXT, self.handle_any_text))
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -168,7 +169,6 @@ class PlannerBot:
         """Начало процесса добавления задачи"""
         logger.info(f"Начало добавления задачи для пользователя {update.effective_user.id}")
         
-        # Очищаем предыдущие данные
         context.user_data.clear()
         
         await update.message.reply_text(
@@ -187,7 +187,6 @@ class PlannerBot:
             )
             return WAITING_TASK
         
-        # Проверяем, что это не время (формат ЧЧ:ММ)
         time_pattern = r'^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$'
         if re.match(time_pattern, task_text):
             await update.message.reply_text(
@@ -208,7 +207,6 @@ class PlannerBot:
         """Получение даты задачи"""
         date_text = update.message.text
         
-        # Обработка быстрого выбора дат
         if date_text == "📅 Сегодня":
             task_date = datetime.now().date()
         elif date_text == "📆 Завтра":
@@ -216,7 +214,6 @@ class PlannerBot:
         elif date_text == "🗓 Послезавтра":
             task_date = (datetime.now() + timedelta(days=2)).date()
         else:
-            # Парсим введенную дату
             try:
                 task_date = datetime.strptime(date_text, "%d.%m.%Y").date()
             except ValueError:
@@ -226,7 +223,6 @@ class PlannerBot:
                 )
                 return WAITING_DATE
         
-        # Проверяем, что дата не в прошлом
         if task_date < datetime.now().date():
             await update.message.reply_text(
                 "❌ Нельзя добавлять задачи на прошедшие даты! Выберите другую дату:",
@@ -247,7 +243,6 @@ class PlannerBot:
         """Получение времени задачи и сохранение"""
         time_text = update.message.text
         
-        # Обработка быстрого выбора времени
         if time_text == "⏰ Сейчас":
             now = datetime.now() + timedelta(minutes=1)
             task_time = now.strftime("%H:%M")
@@ -256,7 +251,6 @@ class PlannerBot:
         elif time_text == "🕑 Через 2 часа":
             task_time = (datetime.now() + timedelta(hours=2)).strftime("%H:%M")
         else:
-            # Парсим введенное время
             if not re.match(r'^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$', time_text):
                 await update.message.reply_text(
                     "❌ Неверный формат времени! Пожалуйста, введите время в формате ЧЧ:ММ (например: 14:30) или выберите из кнопок:",
@@ -265,22 +259,12 @@ class PlannerBot:
                 return WAITING_TIME
             task_time = time_text
         
-        # Получаем данные из контекста
         user_id = update.effective_user.id
         task_text = context.user_data['task_text']
         task_date = context.user_data['task_date']
         display_date = context.user_data['display_date']
         
-        # ДИАГНОСТИКА: проверяем состояние базы перед добавлением
-        print(f"🔄 Перед добавлением задачи: user_id={user_id}, task_text={task_text}, task_date={task_date}, task_time={task_time}")
-        self.db.check_database_status()
-        
-        # Сохраняем задачу в базу
         task_id = self.db.add_task(user_id, task_text, task_date, task_time)
-        
-        # ДИАГНОСТИКА: проверяем состояние базы после добавления
-        print(f"🔄 После добавления задачи: task_id={task_id}")
-        self.db.check_database_status()
         
         success_text = (
             f"✅ Задача успешно добавлена!\n\n"
@@ -296,14 +280,11 @@ class PlannerBot:
             reply_markup=self.get_main_keyboard()
         )
         
-        # Очищаем user_data
         context.user_data.clear()
-        
-        logger.info(f"Задача {task_id} добавлена для пользователя {user_id}")
         return ConversationHandler.END
     
     async def delete_task_button(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик кнопки удаления задачи - показывает список для удаления по ID"""
+        """Обработчик кнопки удаления задачи"""
         user_id = update.effective_user.id
         tasks = self.db.get_user_tasks(user_id)
         
@@ -325,7 +306,6 @@ class PlannerBot:
     
     async def delete_by_id(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Удаление задачи по введенному ID"""
-        # Проверяем, не находимся ли мы в состоянии добавления задачи
         if context.user_data:
             await update.message.reply_text(
                 "❌ Сначала завершите добавление задачи или нажмите '❌ Отмена'",
@@ -345,7 +325,6 @@ class PlannerBot:
             )
             return
         
-        # Проверяем, существует ли задача у этого пользователя
         user_tasks = self.db.get_user_tasks(user_id)
         task_exists = any(task[0] == task_id for task in user_tasks)
         
@@ -356,7 +335,6 @@ class PlannerBot:
             )
             return
         
-        # Удаляем задачу
         self.db.delete_task(task_id, user_id)
         
         await update.message.reply_text(
@@ -370,7 +348,6 @@ class PlannerBot:
         button_text = update.message.text
         task_id = int(button_text.split('_')[1])
         
-        # Удаляем задачу
         self.db.delete_task(task_id, user_id)
         
         await update.message.reply_text(
@@ -393,7 +370,6 @@ class PlannerBot:
     
     async def back_to_main(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Возврат в главное меню"""
-        # Если мы в процессе добавления задачи, очищаем состояние
         if context.user_data:
             context.user_data.clear()
         
@@ -504,8 +480,6 @@ class PlannerBot:
     
     async def handle_any_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик любых текстовых сообщений"""
-        # Если есть активное состояние, игнорируем это сообщение
-        # ConversationHandler сам обработает его
         if context.user_data:
             return
             
@@ -516,22 +490,18 @@ class PlannerBot:
     
     def run(self):
         """Запуск бота"""
-        # Проверяем состояние базы данных при запуске
-        print("🔍 Проверка состояния базы данных при запуске...")
+        print("🚀 Запуск Telegram бота...")
         self.db.check_database_status()
         
         self.setup_handlers()
         
-        # Запускаем планировщик напоминаний
         self.scheduler = Scheduler(self.application.bot)
         self.scheduler.start()
         
-        print("Бот запущен! Нажмите Ctrl+C для остановки.")
+        print("✅ Бот запущен! Нажмите Ctrl+C для остановки.")
         
-        # Запускаем бота
         self.application.run_polling()
         
-        # При остановке останавливаем планировщик
         if self.scheduler:
             self.scheduler.stop()
 

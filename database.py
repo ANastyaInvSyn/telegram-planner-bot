@@ -303,3 +303,28 @@ class Database:
         else:
             return []
 
+def check_database_status(self):
+    """Проверка состояния базы данных"""
+    if self.use_postgres and self.conn:
+        cursor = self.conn.cursor()
+        try:
+            # Проверяем таблицу users
+            cursor.execute("SELECT COUNT(*) FROM users")
+            users_count = cursor.fetchone()[0]
+            
+            # Проверяем таблицу tasks
+            cursor.execute("SELECT COUNT(*) FROM tasks")
+            tasks_count = cursor.fetchone()[0]
+            
+            cursor.close()
+            
+            print(f"📊 Статус базы данных: {users_count} пользователей, {tasks_count} задач")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Ошибка при проверке базы данных: {e}")
+            cursor.close()
+            return False
+    else:
+        print("📊 Используется временное хранилище в памяти")
+        return False

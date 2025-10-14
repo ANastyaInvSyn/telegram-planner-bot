@@ -1,11 +1,16 @@
 import os
+import psycopg2
 from datetime import datetime
 from typing import List, Tuple, Optional
 
-print("=== ДЕБАГ: Запуск database.py ===")
-print(f"DATABASE_URL в окружении: {'DATABASE_URL' in os.environ}")
+print("=== ДЕБАГ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ===")
+print("Все переменные окружения:")
+for key, value in os.environ.items():
+    print(f"{key}: {value}")
+    if 'DATABASE' in key or 'POSTGRES' in key or 'URL' in key:
+        print(f">>> НАЙДЕНА ПЕРЕМЕННАЯ БАЗЫ: {key} = {value}")
 
-# Временное хранилище в памяти
+# Временное хранилище чтобы бот работал пока ищем DATABASE_URL
 class MemoryStorage:
     def __init__(self):
         self.tasks = {}
@@ -53,7 +58,6 @@ class MemoryStorage:
                 else:
                     tasks.append((task['id'], task['text'], task['time']))
         
-        # Сортировка
         if date is None:
             tasks.sort(key=lambda x: (x[2], x[3]))
         else:
@@ -69,7 +73,6 @@ class MemoryStorage:
             ]
 
     def get_tasks_for_reminder(self, target_datetime: datetime) -> List[Tuple]:
-        # Временно отключаем напоминания
         return []
 
     def mark_as_reminded(self, task_ids: List[int]):
@@ -77,26 +80,162 @@ class MemoryStorage:
 
 class Database:
     def __init__(self):
-        self.storage = MemoryStorage()
-        print("✅ База данных инициализирована (MemoryStorage)")
+        print("🔍 Поиск DATABASE_URL...")
+        
+        # Пробуем разные возможные имена переменных
+        possible_db_vars = [
+            'DATABASE_URL',
+            'POSTGRES_URL', 
+            'POSTGRESQL_URL',
+            'DB_URL',
+            'RAILWAY_DATABASE_URL'
+        ]
+        
+        self.db_url = None
+        for var_name in possible_db_vars:
+            if var_name in os.environ:
+                self.db_url = os.environ[var_name]
+                print(f"✅ Найдена переменная: {var_name}")
+                break
+        
+        if self.db_url:
+            print(f"🔗 Подключаемся к PostgreSQL: {self.db_url[:50]}...")
+            try:
+                self.conn = psycopg2.connect(self.db_url, sslmode='require')
+                self.init_db()
+                print("✅ Успешно подключено к PostgreSQL")
+                self.use_memory_storage = False
+            except Exception as e:
+                print(f"❌ Ошибка подключения к PostgreSQL: {e}")
+                print("📝 Используем временное хранилище")
+                self.use_memory_storage = True
+                self.storage = MemoryStorage()
+        else:
+            print("❌ Не найдена переменная базы данных, используем временное хранилище")
+            self.use_memory_storage = True
+            self.storage = MemoryStorage()
 
     def init_db(self):
-        pass
+        """Инициализация базы данных PostgreSQL"""
+        if self.use_memory_storage:
+            return
+            
+        cursor = self.conn.cursor()
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS tasks (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
+                task_text TEXT NOT NULL,
+                task_date DATE NOT NULL,
+                task_time TIME NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                reminded BOOLEAN DEFAULT FALSE,
+                FOREIGN KEY (user_id) REFERENCES users (user_id)
+            )
+        ''')
+        
+        self.conn.commit()
+        cursor.close()
 
     def add_user(self, user_id: int, username: str, first_name: str):
-        self.storage.add_user(user_id, username, first_name)
+        if self.use_memory_storage:
+            self.storage.add_user(user_id, username, first_name)
+        else:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                INSERT INTO users (user_id, username, first_name)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (user_id) DO NOTHING
+            ''', (user_id, username, first_name))
+            self.conn.commit()
+            cursor.close()
 
     def add_task(self, user_id: int, task_text: str, task_date: str, task_time: str) -> int:
-        return self.storage.add_task(user_id, task_text, task_date, task_time)
+        if self.use_memory_storage:
+            return self.storage.add_task(user_id, task_text, task_date, task_time)
+        else:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                INSERT INTO tasks (user_id, task_text, task_date, task_time)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id
+            ''', (user_id, task_text, task_date, task_time))
+            task_id = cursor.fetchone()[0]
+            self.conn.commit()
+            cursor.close()
+            return task_id
 
     def get_user_tasks(self, user_id: int, date: str = None) -> List[Tuple]:
-        return self.storage.get_user_tasks(user_id, date)
+        if self.use_memory_storage:
+            return self.storage.get_user_tasks(user_id, date)
+        else:
+            cursor = self.conn.cursor()
+            if date:
+                cursor.execute('''
+                    SELECT id, task_text, task_time FROM tasks 
+                    WHERE user_id = %s AND task_date = %s 
+                    ORDER BY task_time
+                ''', (user_id, date))
+            else:
+                cursor.execute('''
+                    SELECT id, task_text, task_date, task_time FROM tasks 
+                    WHERE user_id = %s 
+                    ORDER BY task_date, task_time
+                ''', (user_id,))
+            
+            tasks = cursor.fetchall()
+            cursor.close()
+            return tasks
 
     def delete_task(self, task_id: int, user_id: int):
-        self.storage.delete_task(task_id, user_id)
+        if self.use_memory_storage:
+            self.storage.delete_task(task_id, user_id)
+        else:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                DELETE FROM tasks WHERE id = %s AND user_id = %s
+            ''', (task_id, user_id))
+            self.conn.commit()
+            cursor.close()
 
     def get_tasks_for_reminder(self, target_datetime: datetime) -> List[Tuple]:
-        return self.storage.get_tasks_for_reminder(target_datetime)
+        if self.use_memory_storage:
+            return []
+        else:
+            cursor = self.conn.cursor()
+            target_date = target_datetime.strftime('%Y-%m-%d')
+            target_time = target_datetime.strftime('%H:%M')
+            
+            cursor.execute('''
+                SELECT t.user_id, t.task_text, t.task_date, t.task_time, u.first_name
+                FROM tasks t
+                JOIN users u ON t.user_id = u.user_id
+                WHERE t.task_date = %s AND t.task_time = %s AND t.reminded = FALSE
+            ''', (target_date, target_time))
+            
+            tasks = cursor.fetchall()
+            cursor.close()
+            return tasks
 
     def mark_as_reminded(self, task_ids: List[int]):
-        self.storage.mark_as_reminded(task_ids)
+        if self.use_memory_storage or not task_ids:
+            return
+            
+        cursor = self.conn.cursor()
+        placeholders = ','.join(['%s'] * len(task_ids))
+        cursor.execute(f'''
+            UPDATE tasks SET reminded = TRUE 
+            WHERE id IN ({placeholders})
+        ''', task_ids)
+        self.conn.commit()
+        cursor.close()

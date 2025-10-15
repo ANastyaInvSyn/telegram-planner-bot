@@ -12,26 +12,27 @@ class Database:
         self.init_db()
     
     def init_db(self):
-        """Инициализация базы данных для Render"""
+        """Инициализация базы данных для Railway"""
         try:
+            # Railway автоматически предоставляет DATABASE_URL
             database_url = os.environ.get('DATABASE_URL')
             
             if database_url:
-                print(f"🔗 Найден DATABASE_URL: {database_url[:50]}...")
+                print("🔗 Подключение к PostgreSQL на Railway...")
                 
+                # Railway использует postgres://, но psycopg2 требует postgresql://
                 if database_url.startswith('postgres://'):
                     database_url = database_url.replace('postgres://', 'postgresql://', 1)
-                    print("✅ Формат URL исправлен для psycopg2")
                 
-                self.conn = psycopg2.connect(database_url, sslmode='require')
+                self.conn = psycopg2.connect(database_url)
                 self._create_tables()
-                print("✅ Успешно подключено к PostgreSQL на Render")
+                print("✅ Успешно подключено к PostgreSQL на Railway")
                 
             else:
-                print("❌ DATABASE_URL не найден в переменных окружения")
+                print("❌ DATABASE_URL не найден")
                 
         except Exception as e:
-            print(f"❌ Ошибка подключения к базе данных: {e}")
+            print(f"❌ Ошибка подключения к базе: {e}")
     
     def _create_tables(self):
         """Создание таблиц если их нет"""
@@ -80,49 +81,49 @@ class Database:
             
             self.conn.commit()
             cursor.close()
-            print("✅ Таблицы успешно созданы/проверены")
+            print("✅ Таблицы созданы/проверены")
             
         except Exception as e:
-            print(f"❌ Ошибка при создании таблиц: {e}")
+            print(f"❌ Ошибка создания таблиц: {e}")
             self.conn.rollback()
+    
+    def _execute_query(self, query: str, params: tuple = None):
+        """Безопасное выполнение запроса"""
+        if not self.conn:
+            return None
+            
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(query, params or ())
+            self.conn.commit()
+            return cursor
+        except Exception as e:
+            logger.error(f"Ошибка базы: {e}")
+            self.conn.rollback()
+            return None
     
     # === МЕТОДЫ ДЛЯ ЕЖЕДНЕВНЫХ ЗАДАЧ ===
     
     def add_user(self, user_id: int, username: str, first_name: str):
-        if self.conn:
-            cursor = self.conn.cursor()
-            try:
-                cursor.execute('''
-                    INSERT INTO users (user_id, username, first_name)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (user_id) DO NOTHING
-                ''', (user_id, username, first_name))
-                self.conn.commit()
-                cursor.close()
-            except Exception as e:
-                print(f"❌ Ошибка добавления пользователя: {e}")
-                self.conn.rollback()
+        cursor = self._execute_query('''
+            INSERT INTO users (user_id, username, first_name)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (user_id) DO NOTHING
+        ''', (user_id, username, first_name))
+        if cursor:
+            cursor.close()
     
     def add_task(self, user_id: int, task_text: str, task_date: str, task_time: str) -> int:
-        if self.conn:
-            cursor = self.conn.cursor()
-            try:
-                cursor.execute('''
-                    INSERT INTO tasks (user_id, task_text, task_date, task_time)
-                    VALUES (%s, %s, %s, %s)
-                    RETURNING id
-                ''', (user_id, task_text, task_date, task_time))
-                
-                task_id = cursor.fetchone()[0]
-                self.conn.commit()
-                cursor.close()
-                print(f"✅ Ежедневная задача добавлена с ID: {task_id}")
-                return task_id
-                
-            except Exception as e:
-                print(f"❌ Ошибка добавления ежедневной задачи: {e}")
-                self.conn.rollback()
-                return 0
+        cursor = self._execute_query('''
+            INSERT INTO tasks (user_id, task_text, task_date, task_time)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
+        ''', (user_id, task_text, task_date, task_time))
+        
+        if cursor:
+            task_id = cursor.fetchone()[0]
+            cursor.close()
+            return task_id
         return 0
     
     def get_user_tasks(self, user_id: int, date: str = None) -> List[Tuple]:
@@ -149,50 +150,68 @@ class Database:
             return tasks
             
         except Exception as e:
-            print(f"❌ Ошибка получения ежедневных задач: {e}")
+            logger.error(f"Ошибка получения задач: {e}")
             return []
     
     def delete_task(self, task_id: int, user_id: int):
-        if self.conn:
+        self._execute_query('''
+            DELETE FROM tasks WHERE id = %s AND user_id = %s
+        ''', (task_id, user_id))
+    
+    def get_tasks_for_reminder(self, target_datetime: datetime) -> List[Tuple]:
+        if not self.conn:
+            return []
+            
+        cursor = self.conn.cursor()
+        try:
+            target_date = target_datetime.strftime('%Y-%m-%d')
+            target_time = target_datetime.strftime('%H:%M')
+            
+            cursor.execute('''
+                SELECT t.id, t.user_id, t.task_text, t.task_date, t.task_time, u.first_name
+                FROM tasks t
+                JOIN users u ON t.user_id = u.user_id
+                WHERE t.task_date = %s AND t.task_time = %s AND t.reminded = FALSE
+            ''', (target_date, target_time))
+            
+            tasks = cursor.fetchall()
+            cursor.close()
+            return tasks
+        except Exception as e:
+            logger.error(f"Ошибка получения напоминаний: {e}")
+            return []
+    
+    def mark_as_reminded(self, task_ids: List[int]):
+        if self.conn and task_ids:
             cursor = self.conn.cursor()
             try:
-                cursor.execute('''
-                    DELETE FROM tasks WHERE id = %s AND user_id = %s
-                ''', (task_id, user_id))
+                placeholders = ','.join(['%s'] * len(task_ids))
+                cursor.execute(f'''
+                    UPDATE tasks SET reminded = TRUE 
+                    WHERE id IN ({placeholders})
+                ''', task_ids)
                 self.conn.commit()
                 cursor.close()
-                print(f"✅ Ежедневная задача {task_id} удалена")
             except Exception as e:
-                print(f"❌ Ошибка удаления ежедневной задачи: {e}")
+                logger.error(f"Ошибка отметки напоминаний: {e}")
                 self.conn.rollback()
     
     # === МЕТОДЫ ДЛЯ НЕДЕЛЬНЫХ ЗАДАЧ ===
     
     def add_weekly_task(self, user_id: int, task_text: str, week_start: str) -> int:
-        """Добавить недельную задачу"""
-        if self.conn:
-            cursor = self.conn.cursor()
-            try:
-                cursor.execute('''
-                    INSERT INTO weekly_tasks (user_id, task_text, week_start)
-                    VALUES (%s, %s, %s)
-                    RETURNING id
-                ''', (user_id, task_text, week_start))
-                
-                task_id = cursor.fetchone()[0]
-                self.conn.commit()
-                cursor.close()
-                print(f"✅ Недельная задача добавлена с ID: {task_id}")
-                return task_id
-                
-            except Exception as e:
-                print(f"❌ Ошибка добавления недельной задачи: {e}")
-                self.conn.rollback()
-                return 0
+        cursor = self._execute_query('''
+            INSERT INTO weekly_tasks (user_id, task_text, week_start)
+            VALUES (%s, %s, %s)
+            RETURNING id
+        ''', (user_id, task_text, week_start))
+        
+        if cursor:
+            task_id = cursor.fetchone()[0]
+            cursor.close()
+            return task_id
         return 0
     
     def get_weekly_tasks(self, user_id: int, week_start: str) -> List[Tuple]:
-        """Получить недельные задачи для пользователя и недели"""
         if not self.conn:
             return []
             
@@ -208,69 +227,31 @@ class Database:
             tasks = cursor.fetchall()
             cursor.close()
             return tasks
-            
         except Exception as e:
-            print(f"❌ Ошибка получения недельных задач: {e}")
+            logger.error(f"Ошибка получения недельных задач: {e}")
             return []
     
     def complete_weekly_task(self, task_id: int, user_id: int):
-        """Отметить недельную задачу как выполненную"""
-        if self.conn:
-            cursor = self.conn.cursor()
-            try:
-                cursor.execute('''
-                    UPDATE weekly_tasks 
-                    SET completed = TRUE 
-                    WHERE id = %s AND user_id = %s
-                ''', (task_id, user_id))
-                
-                self.conn.commit()
-                cursor.close()
-                print(f"✅ Недельная задача {task_id} отмечена как выполненная")
-                
-            except Exception as e:
-                print(f"❌ Ошибка отметки недельной задачи: {e}")
-                self.conn.rollback()
+        self._execute_query('''
+            UPDATE weekly_tasks 
+            SET completed = TRUE 
+            WHERE id = %s AND user_id = %s
+        ''', (task_id, user_id))
     
     def delete_weekly_task(self, task_id: int, user_id: int):
-        """Удалить недельную задачу"""
-        if self.conn:
-            cursor = self.conn.cursor()
-            try:
-                cursor.execute('''
-                    DELETE FROM weekly_tasks 
-                    WHERE id = %s AND user_id = %s
-                ''', (task_id, user_id))
-                
-                self.conn.commit()
-                cursor.close()
-                print(f"✅ Недельная задача {task_id} удалена")
-                
-            except Exception as e:
-                print(f"❌ Ошибка удаления недельной задачи: {e}")
-                self.conn.rollback()
+        self._execute_query('''
+            DELETE FROM weekly_tasks 
+            WHERE id = %s AND user_id = %s
+        ''', (task_id, user_id))
     
     def move_uncompleted_weekly_tasks(self, from_week: str, to_week: str):
-        """Перенести невыполненные задачи на следующую неделю"""
-        if self.conn:
-            cursor = self.conn.cursor()
-            try:
-                cursor.execute('''
-                    UPDATE weekly_tasks 
-                    SET week_start = %s, completed = FALSE
-                    WHERE week_start = %s AND completed = FALSE
-                ''', (to_week, from_week))
-                
-                self.conn.commit()
-                cursor.close()
-                print(f"✅ Невыполненные задачи перенесены с {from_week} на {to_week}")
-                
-            except Exception as e:
-                print(f"❌ Ошибка переноса недельных задач: {e}")
-                self.conn.rollback()
+        self._execute_query('''
+            UPDATE weekly_tasks 
+            SET week_start = %s, completed = FALSE
+            WHERE week_start = %s AND completed = FALSE
+        ''', (to_week, from_week))
     
     def get_users_for_weekly_reminder(self):
-        """Получить всех пользователей, у которых есть активные недельные задачи"""
         if not self.conn:
             return []
             
@@ -285,7 +266,6 @@ class Database:
             users = [row[0] for row in cursor.fetchall()]
             cursor.close()
             return users
-            
         except Exception as e:
-            print(f"❌ Ошибка получения пользователей для напоминания: {e}")
+            logger.error(f"Ошибка получения пользователей: {e}")
             return []

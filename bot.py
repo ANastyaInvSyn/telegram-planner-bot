@@ -326,8 +326,20 @@ class PlannerBot:
         task_date = context.user_data['task_date']
         display_date = context.user_data['display_date']
         
+        print(f"🔍 DEBUG: Сохранение задачи - user_id: {user_id}, text: {task_text}, date: {task_date}, time: {task_time}")
+        
         # Сохраняем задачу в базу
         task_id = self.db.add_task(user_id, task_text, task_date, task_time)
+        
+        print(f"🔍 DEBUG: Полученный task_id: {task_id}")
+        
+        if task_id == 0:
+            await update.message.reply_text(
+                "❌ Ошибка при сохранении задачи в базу данных!",
+                reply_markup=self.get_main_keyboard()
+            )
+            context.user_data.clear()
+            return ConversationHandler.END
         
         success_text = (
             f"✅ Задача успешно добавлена!\n\n"
@@ -707,4 +719,3 @@ class PlannerBot:
 if __name__ == "__main__":
     bot = PlannerBot()
     bot.run()
-

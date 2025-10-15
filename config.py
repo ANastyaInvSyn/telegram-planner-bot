@@ -1,11 +1,12 @@
 import os
 
-# Получаем токен из переменных окружения (для хостинга) или используем локальный
-BOT_TOKEN = os.environ.get('BOT_TOKEN', '8392912343:AAH9Cwbsc_6BujWFGXKULrWGgfXg17s4bOc')
+# Получаем токен из переменных окружения
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+
 if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN не найден!")
+    raise ValueError("❌ BOT_TOKEN не найден в переменных окружения!")
 
 TIMEZONE = "Europe/Moscow"
-REMINDER_TIMES = [5, 15, 30, 60]  # За сколько минут напоминать о ежедневных задачах
+REMINDER_TIMES = [5, 15, 30, 60]  # За сколько минут напоминать
 
 print("✅ Конфигурация загружена успешно")

@@ -1,3 +1,5 @@
-python-telegram-bot
-schedule
-psycopg2-binary
+python-telegram-bot==21.7
+psycopg2-binary==2.9.9
+python-dateutil==2.8.2
+pytz==2024.1
+schedule==1.2.0

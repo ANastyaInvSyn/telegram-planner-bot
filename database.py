@@ -28,6 +28,13 @@ class Database:
                 self._create_tables()
                 print("✅ Успешно подключено к PostgreSQL на Railway")
                 
+                # Проверка подключения
+                cursor = self.conn.cursor()
+                cursor.execute("SELECT version();")
+                db_version = cursor.fetchone()
+                print(f"🔍 Версия PostgreSQL: {db_version[0]}")
+                cursor.close()
+                
             else:
                 print("❌ DATABASE_URL не найден")
                 
@@ -87,7 +94,7 @@ class Database:
             print(f"❌ Ошибка создания таблиц: {e}")
             self.conn.rollback()
     
-    def _execute_query(self, query: str, params: tuple = None):
+    def _execute_query(self, query: str, params: tuple = None, return_result: bool = False):
         """Безопасное выполнение запроса"""
         if not self.conn:
             return None
@@ -95,8 +102,15 @@ class Database:
         cursor = self.conn.cursor()
         try:
             cursor.execute(query, params or ())
-            self.conn.commit()
-            return cursor
+            if return_result:
+                result = cursor.fetchone()
+                self.conn.commit()
+                cursor.close()
+                return result
+            else:
+                self.conn.commit()
+                cursor.close()
+                return cursor
         except Exception as e:
             logger.error(f"Ошибка базы: {e}")
             self.conn.rollback()
@@ -114,16 +128,14 @@ class Database:
             cursor.close()
     
     def add_task(self, user_id: int, task_text: str, task_date: str, task_time: str) -> int:
-        cursor = self._execute_query('''
+        result = self._execute_query('''
             INSERT INTO tasks (user_id, task_text, task_date, task_time)
             VALUES (%s, %s, %s, %s)
             RETURNING id
-        ''', (user_id, task_text, task_date, task_time))
+        ''', (user_id, task_text, task_date, task_time), return_result=True)
         
-        if cursor:
-            task_id = cursor.fetchone()[0]
-            cursor.close()
-            return task_id
+        if result:
+            return result[0]
         return 0
     
     def get_user_tasks(self, user_id: int, date: str = None) -> List[Tuple]:
@@ -199,16 +211,14 @@ class Database:
     # === МЕТОДЫ ДЛЯ НЕДЕЛЬНЫХ ЗАДАЧ ===
     
     def add_weekly_task(self, user_id: int, task_text: str, week_start: str) -> int:
-        cursor = self._execute_query('''
+        result = self._execute_query('''
             INSERT INTO weekly_tasks (user_id, task_text, week_start)
             VALUES (%s, %s, %s)
             RETURNING id
-        ''', (user_id, task_text, week_start))
+        ''', (user_id, task_text, week_start), return_result=True)
         
-        if cursor:
-            task_id = cursor.fetchone()[0]
-            cursor.close()
-            return task_id
+        if result:
+            return result[0]
         return 0
     
     def get_weekly_tasks(self, user_id: int, week_start: str) -> List[Tuple]:

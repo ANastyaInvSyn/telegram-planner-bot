@@ -663,7 +663,6 @@ class PlannerBot:
             "• Напоминания каждый день в 10:00\n"
             "• Автоперенос на следующую неделю\n"
             "• Можно добавить на текущую или следующую неделю\n\n"
-            "❌ Чтобы отменить действие - нажмите '❌ Отмена'\n"
             "⬅️ Чтобы вернуться в меню - нажмите '⬅️ Назад'"
         )
         await update.message.reply_text(help_text, reply_markup=self.get_main_keyboard())
@@ -708,3 +707,4 @@ class PlannerBot:
 if __name__ == "__main__":
     bot = PlannerBot()
     bot.run()
+
